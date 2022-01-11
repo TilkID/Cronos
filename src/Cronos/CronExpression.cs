@@ -69,14 +69,20 @@ namespace Cronos
         private int   _dayOfMonth; // 31 bits -> from 1 bit to 31 bit
         private short _month;      // 12 bits -> from 1 bit to 12 bit
         private byte  _dayOfWeek;  // 8 bits  -> from 0 bit to 7 bit
+        
+        private int? _daysInterval;
+        private int? _monthsInterval;
+        private long? _refDateAsTicks;
 
         private byte  _nthDayOfWeek;
         private byte  _lastMonthOffset;
 
         private CronExpressionFlag _flags;
+        private CronFormat _format;
 
-        private CronExpression()
+        private CronExpression(CronFormat format = CronFormat.Standard)
         {
+            _format = format;
         }
 
         ///<summary>
@@ -122,9 +128,9 @@ namespace Cronos
                     return cronExpression;
                 }
 
-                cronExpression = new CronExpression();
-
-                if (format == CronFormat.IncludeSeconds)
+                cronExpression = new CronExpression(format);
+                
+                if ((cronExpression._format & CronFormat.IncludeSeconds) == CronFormat.IncludeSeconds)
                 {
                     cronExpression._second = ParseField(CronField.Seconds, ref pointer, ref cronExpression._flags);
                     ParseWhiteSpace(CronField.Seconds, ref pointer);
@@ -140,13 +146,30 @@ namespace Cronos
                 cronExpression._hour = (int)ParseField(CronField.Hours, ref pointer, ref cronExpression._flags);
                 ParseWhiteSpace(CronField.Hours, ref pointer);
 
-                cronExpression._dayOfMonth = (int)ParseDayOfMonth(ref pointer, ref cronExpression._flags, ref cronExpression._lastMonthOffset);
+                cronExpression._dayOfMonth = (int)ParseDayOfMonth(ref pointer, ref cronExpression._flags, ref cronExpression._lastMonthOffset, out int? dayInterval);
+                if ((dayInterval ?? 0) > 1)
+                {
+                    cronExpression._daysInterval = dayInterval;
+                    cronExpression._format |= CronFormat.IncludeIntervals;
+                }
                 ParseWhiteSpace(CronField.DaysOfMonth, ref pointer);
 
-                cronExpression._month = (short)ParseField(CronField.Months, ref pointer, ref cronExpression._flags);
+                cronExpression._month = (short)ParseMonth(CronField.Months, ref pointer, ref cronExpression._flags, out int? monthInterval);
+                if (((dayInterval ?? 0) < 1) && ((monthInterval ?? 0) > 1))
+                {
+                    cronExpression._monthsInterval = monthInterval; 
+                    cronExpression._format |= CronFormat.IncludeIntervals;
+                }
                 ParseWhiteSpace(CronField.Months, ref pointer);
 
                 cronExpression._dayOfWeek = (byte)ParseDayOfWeek(ref pointer, ref cronExpression._flags, ref cronExpression._nthDayOfWeek);
+                
+                if ((cronExpression._format & CronFormat.IncludeIntervals) == CronFormat.IncludeIntervals)
+                {
+                    ParseWhiteSpace(CronField.DaysOfWeek, ref pointer);
+                    var referenceDate = ParseDateTimeOrNull(ref pointer);
+                    cronExpression._refDateAsTicks = GetTicksRoundedToSecond((referenceDate ?? DateTime.UtcNow).Ticks);
+                }
                 ParseEndOfString(ref pointer);
 
                 // Make sundays equivalent.
@@ -285,15 +308,23 @@ namespace Cronos
         /// <inheritdoc />
         public override string ToString()
         {
+            return FormatAsString();
+        }
+
+        private string FormatAsString(byte? overrideDayOfWeek = null)
+        {
             var expressionBuilder = new StringBuilder();
-            
             AppendFieldValue(expressionBuilder, CronField.Seconds, _second).Append(' ');
             AppendFieldValue(expressionBuilder, CronField.Minutes, _minute).Append(' ');
             AppendFieldValue(expressionBuilder, CronField.Hours, _hour).Append(' ');
             AppendDayOfMonth(expressionBuilder, _dayOfMonth).Append(' ');
-            AppendFieldValue(expressionBuilder, CronField.Months, _month).Append(' ');
-            AppendDayOfWeek(expressionBuilder, _dayOfWeek);
-
+            AppendMonth(expressionBuilder, CronField.Months, _month).Append(' ');
+            AppendDayOfWeek(expressionBuilder, overrideDayOfWeek ?? _dayOfWeek);
+            if (((_monthsInterval ?? 0) > 1 || (_daysInterval ?? 0) > 1) && _refDateAsTicks.HasValue)
+            {
+                expressionBuilder.Append(' ');
+                expressionBuilder.Append(_refDateAsTicks.ToString());
+            }
             return expressionBuilder.ToString();
         }
 
@@ -443,6 +474,132 @@ namespace Cronos
 
         private long FindOccurrence(long ticks, bool startInclusive)
         {
+            var formatIncludeIntervals = ((_format & CronFormat.IncludeIntervals) == CronFormat.IncludeIntervals);
+            if (formatIncludeIntervals
+                && _refDateAsTicks.HasValue
+                && (_daysInterval.HasValue || _monthsInterval.HasValue))
+            {
+                var properTicks = GetTicksRoundedToSecond(ticks);
+                return FindIntervalOccurence(properTicks, startInclusive);
+            }
+            return FindOccurrenceInternal(ticks, startInclusive);
+        }
+
+        private long FindIntervalOccurence(long ticks, bool startInclusive)
+        {
+            var properDayOfWeek = (_dayOfWeek & SundayBits) == SundayBits ? _dayOfWeek ^ 128 : _dayOfWeek; // Remove second Sunday
+            if (properDayOfWeek > 0 && !IsOnlyOneFlag(properDayOfWeek))
+            {
+                long minDate = 0; 
+
+                foreach (var day in SplitFlags((byte)properDayOfWeek))
+                {
+                    var dayExpression = Parse(FormatAsString(day), CronFormat.IncludeSeconds);
+                    var potentialDate = dayExpression.FindIntervalOccurence(ticks, startInclusive);
+                    if (minDate == 0 || potentialDate < minDate)
+                    {
+                        minDate = potentialDate;
+                    }
+                }
+                return minDate;
+            }
+            else
+            {
+                var currentDate = FindOccurrenceInternal(_refDateAsTicks.Value, startInclusive);
+                return FindIntervalOccurence(ticks, startInclusive, currentDate);
+            }
+        }
+
+        private bool IsOnlyOneFlag(int value)
+        {
+            return Math.Log(value, 2) % 1 == 0;
+        }
+        
+        private List<byte> SplitFlags(byte value)
+        {
+            List<byte> result = new List<byte>();
+            if (value <= 0) { return result; }
+
+            if (IsOnlyOneFlag(value))
+            {
+                result.Add((byte)(int)Math.Floor(Math.Log(value, 2)));
+            }
+            else
+            {
+                int curFlagPow = 0;
+                int curFlag = (int)Math.Pow(2, curFlagPow);
+                while (curFlag < value)
+                {
+                    if ((value & curFlag) == curFlag)
+                    {
+                        result.Add((byte)curFlag);
+                    }
+
+                    curFlagPow++;
+                    curFlag = (int)Math.Pow(2, curFlagPow);
+                } 
+            }
+            return result;
+        }
+
+        private long FindIntervalOccurence(long ticks, bool startInclusive, long baseDate)
+        {
+            while (baseDate <= ticks)
+            {
+                if ((baseDate > ticks) || (startInclusive && baseDate == ticks))
+                {
+                    return baseDate;
+                }
+
+                var loopRefDate = new DateTime(baseDate);
+                if (_monthsInterval.HasValue)
+                {
+                    var diff = GetMinimumMonthDiff(baseDate, ticks);
+                    var minimumMonthIntervals = (diff - (diff % _monthsInterval.Value)) / _monthsInterval.Value;
+                    loopRefDate = loopRefDate.AddMonths(_monthsInterval.Value * (minimumMonthIntervals > 1 ? minimumMonthIntervals : 1));
+                }
+                else if (_daysInterval.HasValue)
+                {
+                    var diff = GetMinimumDaysDiff(baseDate, ticks);
+                    var minimumDayIntervals = (diff - (diff % _daysInterval.Value)) / _daysInterval.Value;
+                    loopRefDate = loopRefDate.AddDays(_daysInterval.Value * (minimumDayIntervals > 1 ? minimumDayIntervals : 1));
+                }
+                baseDate = loopRefDate.Ticks;
+            }
+            return baseDate;
+        }
+
+        private static long GetTicksRoundedToSecond(long ticks)
+        {
+            var dateTime = new DateTime(ticks);
+            return new DateTime(dateTime.Year, dateTime.Month, dateTime.Day, dateTime.Hour, dateTime.Minute, dateTime.Second, DateTimeKind.Utc).Ticks;
+        }
+        
+        private int GetMinimumDaysDiff(long startTicks, long endTicks)
+        {
+            var start = GetDateTimeRoundedToDay(startTicks <= endTicks ? startTicks: endTicks);
+            var end = GetDateTimeRoundedToDay(startTicks <= endTicks ? endTicks : startTicks);
+            return end.Subtract(start).Days;
+        }
+        
+        private int GetMinimumMonthDiff(long startTicks, long endTicks)
+        {
+            var start = GetDateTimeRoundedToDay(startTicks <= endTicks ? startTicks: endTicks);
+            var end = GetDateTimeRoundedToDay(startTicks <= endTicks ? endTicks : startTicks);
+            var result = (start.Year * 12 + start.Month) - (end.Year * 12 + end.Month);
+            if (start.Day == end.Day) { return result; }
+            if (end.Day < start.Day) { result--; }
+            return result;
+        }
+        
+        private static DateTime GetDateTimeRoundedToDay(long ticks)
+        {
+            var dateTime = new DateTime(ticks);
+            return new DateTime(dateTime.Year, dateTime.Month, dateTime.Day, 0, 0, 0, DateTimeKind.Utc);
+        }
+
+        private long FindOccurrenceInternal(long ticks, bool startInclusive)
+        {
             if (!startInclusive) ticks++;
 
             CalendarHelper.FillDateTimeParts(
@@ -565,7 +722,55 @@ namespace Cronos
         {
             while (IsWhiteSpace(*pointer)) { pointer++; }
         }
+       
+#if !NET40
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+#endif
+        private static unsafe int? ParseIntOrNull(ref char* pointer)
+        {
+            var numChar = string.Empty;
+            while (IsDigit(*pointer))
+            {
+                numChar += GetNumeric(*pointer++);
+            }
 
+            int? result = null;
+            if (numChar != string.Empty && int.TryParse(numChar, out var parsedInt))
+            {
+                result = parsedInt;
+            }
+
+            return result;
+        }
+
+#if !NET40
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+#endif
+        private static unsafe DateTime? ParseDateTimeOrNull(ref char* pointer)
+        {
+            var numChar = string.Empty;
+            var hasOnlyDigits = true;
+            while (!IsWhiteSpace(*pointer) && !IsEndOfString(*pointer))
+            {
+                if (!IsDigit(*pointer)) { hasOnlyDigits = false;}
+                numChar += *pointer++;
+            }
+
+            DateTime? result = null;
+            if (numChar != string.Empty)
+            {
+                if (hasOnlyDigits)
+                {
+                    result = new DateTime(long.Parse(numChar));
+                }
+                else if (DateTime.TryParse(numChar, out DateTime parsedDate))
+                {
+                    result = parsedDate;
+                }
+            }
+            return result;
+        }
+        
 #if !NET40
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
 #endif
@@ -699,12 +904,32 @@ namespace Cronos
 
             return bits;
         }
-
-        private static unsafe long ParseDayOfMonth(ref char* pointer, ref CronExpressionFlag flags, ref byte lastDayOffset)
+        
+        private static unsafe long ParseMonth(CronField field, ref char* pointer, ref CronExpressionFlag flags, out int? interval)
         {
+            interval = null;
+            if (Accept(ref pointer, '*') || Accept(ref pointer, '?'))
+            {
+                if (field.CanDefineInterval) flags |= CronExpressionFlag.Interval;
+                return ParseStar(field, ref pointer);
+            }
+            if (Accept(ref pointer, 'i')) return ParseInterval(field, ref pointer, out interval);
+
+            var num = ParseValue(field, ref pointer);
+
+            var bits = ParseRange(field, ref pointer, num, ref flags);
+            if (Accept(ref pointer, ',')) bits |= ParseList(field, ref pointer, ref flags);
+
+            return bits;
+        }
+
+        private static unsafe long ParseDayOfMonth(ref char* pointer, ref CronExpressionFlag flags, ref byte lastDayOffset, out int? interval)
+        {
+            interval = null;
             var field = CronField.DaysOfMonth;
 
             if (Accept(ref pointer, '*') || Accept(ref pointer, '?')) return ParseStar(field, ref pointer);
+            if (Accept(ref pointer, 'i')) return ParseInterval(field, ref pointer, out interval);
 
             if (AcceptCharacter(ref pointer, 'L')) return ParseLastDayOfMonth(field, ref pointer, ref flags, ref lastDayOffset);
 
@@ -750,6 +975,20 @@ namespace Cronos
             return Accept(ref pointer, '/')
                 ? ParseStep(field, ref pointer, field.First, field.Last)
                 : field.AllBits;
+        }
+        
+#if !NET40
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+#endif
+        private static unsafe long ParseInterval(CronField field, ref char* pointer, out int? interval)
+        {
+            interval = null;
+            if(Accept(ref pointer, '/'))
+            {
+                interval = ParseIntOrNull(ref pointer);
+            }
+            return field.AllBits;
         }
 
 #if !NET40
@@ -897,12 +1136,31 @@ namespace Cronos
 
             return expressionBuilder;
         }
+        
+#if !NET40
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+#endif
+        private StringBuilder AppendMonth(StringBuilder expressionBuilder, CronField field, long fieldValue)
+        {
+            if ((_monthsInterval ?? 0) > 1)
+            {
+                expressionBuilder.Append("i/").Append(_monthsInterval);
+                return expressionBuilder;
+            }
+            return AppendFieldValue(expressionBuilder, field, fieldValue);
+        }
+
 
 #if !NET40
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
 #endif
         private StringBuilder AppendDayOfMonth(StringBuilder expressionBuilder, int domValue)
         {
+            if ((_daysInterval ?? 0) > 1)
+            {
+                expressionBuilder.Append("i/").Append(_daysInterval);
+                return expressionBuilder;
+            }
             if (HasFlag(CronExpressionFlag.DayOfMonthLast))
             {
                 expressionBuilder.Append('L');

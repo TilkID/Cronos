@@ -38,6 +38,11 @@ namespace Cronos
         /// <summary>
         /// Second field must be specified in parsing string.
         /// </summary>
-        IncludeSeconds = 1
+        IncludeSeconds = 1,
+        
+        /// <summary>
+        /// Parsing string must contain only 8 fields: minute, hour, day of month, month, day of week, daysInterval, monthsInterval, refDateAsTicks 
+        /// </summary>
+        IncludeIntervals = 2
     }
 }
