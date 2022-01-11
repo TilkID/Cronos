@@ -6,14 +6,15 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <DebugType>embedded</DebugType>
 
-    <PackageId>Cronos</PackageId>
+    <PackageId>IDCronos</PackageId>
     <Authors>Andrey Dorokhov, Sergey Odinokov</Authors>
     <Owners>aidmsu, odinserj</Owners>
     <Description>A fully-featured .NET library for parsing Cron expressions and calculating next occurrences that was designed with time zones in mind and correctly handles daylight saving time transitions.</Description>
-    <PackageProjectUrl>https://github.com/HangfireIO/Cronos</PackageProjectUrl>
-    <PackageLicenseUrl>https://raw.github.com/HangfireIO/Cronos/master/LICENSE</PackageLicenseUrl>
+    <RepositoryUrl>https://github.com/TilkID/Cronos</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/TilkID/Cronos</PackageProjectUrl>
+    <PackageLicenseUrl>https://raw.github.com/TilkID/Cronos/master/LICENSE</PackageLicenseUrl>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
-    <PackageReleaseNotes>https://github.com/HangfireIO/Cronos/releases</PackageReleaseNotes>
+    <PackageReleaseNotes>https://github.com/TilkID/Cronos/releases</PackageReleaseNotes>
     <Copyright>Copyright © 2016-2018 Sergey Odinokov.</Copyright>
     <PackageTags>Cronos Cron Recurring</PackageTags>
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>

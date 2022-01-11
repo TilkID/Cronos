@@ -1,4 +1,4 @@
-# Cronos
+# TilkID/Cronos (Forked from HangfireIO/Cronos)
 [![NuGet](https://img.shields.io/nuget/v/Cronos.svg)](https://www.nuget.org/packages/Cronos) [![AppVeyor](https://img.shields.io/appveyor/ci/odinserj/cronos/master.svg?label=appveyor)](https://ci.appveyor.com/project/odinserj/cronos/branch/master) [![Travis](https://img.shields.io/travis/HangfireIO/Cronos/master.svg?label=travis)](https://travis-ci.org/HangfireIO/Cronos)
 
 Cronos is a .NET library for parsing Cron expressions and calculating next occurrences. It was designed with time zones in mind, and intuitively handles [Daylight saving time](https://en.wikipedia.org/wiki/Daylight_saving_time) (also known as Summer time) transitions as in *nix Cron.
@@ -107,11 +107,11 @@ Cron expression is a mask to define fixed times, dates and intervals. The mask c
     ┌───────────── second (optional)       0-59              * , - /                      
     │ ┌───────────── minute                0-59              * , - /                      
     │ │ ┌───────────── hour                0-23              * , - /                      
-    │ │ │ ┌───────────── day of month      1-31              * , - / L W ?                
-    │ │ │ │ ┌───────────── month           1-12 or JAN-DEC   * , - /                      
+    │ │ │ ┌───────────── day of month      1-31              * i , - / L W ?                
+    │ │ │ │ ┌───────────── month           1-12 or JAN-DEC   * i , - /                      
     │ │ │ │ │ ┌───────────── day of week   0-6  or SUN-SAT   * , - / # L ?                Both 0 and 7 means SUN
     │ │ │ │ │ │
-    * * * * * *
+    * * * * * * ReferenceDate as Ticks or Parseable string for intervals using **`i`** 
 
 ### Base characters
 
@@ -125,13 +125,14 @@ In month and day-of-week fields, you can use names of months or days of weeks ab
 
 For day of week field, both `0` and `7` stays for Sunday, 1 for Monday.
 
-| Expression           | Description                                                                           |
-|----------------------|---------------------------------------------------------------------------------------|
-| `* * * * *`          | Every minute                                                                          |
-| `0  0 1 * *`         | At midnight, on day 1 of every month                                                  |
-| `*/5 * * * *`        | Every 5 minutes                                                                       |
-| `30,45-15/2 1 * * *` | Every 2 minute from 1:00 AM to 01:15 AM and from 1:45 AM to 1:59 AM and at 1:30 AM    |
-| `0 0 * * MON-FRI`    | At 00:00, Monday through Friday                                                       |
+| Expression             | Description                                                                           |
+|------------------------|---------------------------------------------------------------------------------------|
+| `* * * * *`            | Every minute                                                                          |
+| `0  0 1 * *`           | At midnight, on day 1 of every month                                                  |
+| `*/5 * * * *`          | Every 5 minutes                                                                       |
+| `30,45-15/2 1 * * *`   | Every 2 minute from 1:00 AM to 01:15 AM and from 1:45 AM to 1:59 AM and at 1:30 AM    |
+| `0 0 * * MON-FRI`      | At 00:00, Monday through Friday                                                       |
+| `0 8 i/21 * FRI {date}`| At 08:00, on first Friday after `{date}` then every 21 days                           |
 
 ### Special characters
 
@@ -144,6 +145,8 @@ Most expressions you can describe using base characters. If you want to deal wit
 **`#`** in day-of-week field allows to specify constructs such as *second Saturday* (`6#2` or `SAT#2`).
 
 **`?`** is synonym of `*`. It's supported but not obligatory, so `0 0 5 * ?` is the same as `0 0 5 * *`.
+
+**`i`** is to define and interval on `day of month` or `month` (if both are defined, interval on `day of month` will win), CRON will be computed in order .
 
 | Expression        | Description                                              |
 |-------------------|----------------------------------------------------------|
