@@ -72,6 +72,7 @@ namespace Cronos
         
         private int? _daysInterval;
         private int? _monthsInterval;
+        private byte? _properDayOfWeek;
         private long? _refDateAsTicks;
 
         private byte  _nthDayOfWeek;
@@ -162,9 +163,18 @@ namespace Cronos
                 }
                 ParseWhiteSpace(CronField.Months, ref pointer);
 
-                cronExpression._dayOfWeek = (byte)ParseDayOfWeek(ref pointer, ref cronExpression._flags, ref cronExpression._nthDayOfWeek);
+                cronExpression._dayOfWeek = (byte)ParseDayOfWeek(ref pointer, ref cronExpression._flags, ref cronExpression._nthDayOfWeek, out bool dayOfWeekIsStar);
+                if (!dayOfWeekIsStar)
+                {
+                    cronExpression._properDayOfWeek = cronExpression._dayOfWeek;
+                    if ((cronExpression._properDayOfWeek & SundayBits) != 0)
+                    {
+                        cronExpression._properDayOfWeek |= SundayBits;
+                        cronExpression._properDayOfWeek ^= 128;
+                    }
+                }
                 
-                if ((cronExpression._format & CronFormat.IncludeIntervals) == CronFormat.IncludeIntervals)
+                if (dayInterval != null || monthInterval != null)
                 {
                     ParseWhiteSpace(CronField.DaysOfWeek, ref pointer);
                     var referenceDate = ParseDateTimeOrNull(ref pointer);
@@ -487,12 +497,11 @@ namespace Cronos
 
         private long FindIntervalOccurence(long ticks, bool startInclusive)
         {
-            var properDayOfWeek = (_dayOfWeek & SundayBits) == SundayBits ? _dayOfWeek ^ 128 : _dayOfWeek; // Remove second Sunday
-            if (properDayOfWeek > 0 && !IsOnlyOneFlag(properDayOfWeek))
+            if ((_properDayOfWeek ?? 0) > 0 && !IsOnlyOneFlag(_properDayOfWeek.Value))
             {
                 long minDate = 0; 
 
-                foreach (var day in SplitFlags((byte)properDayOfWeek))
+                foreach (var day in SplitFlags((byte)_properDayOfWeek.Value))
                 {
                     var dayExpression = Parse(FormatAsString(day), CronFormat.IncludeSeconds);
                     var potentialDate = dayExpression.FindIntervalOccurence(ticks, startInclusive);
@@ -950,10 +959,15 @@ namespace Cronos
 #if !NET40
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
 #endif
-        private static unsafe long ParseDayOfWeek(ref char* pointer, ref CronExpressionFlag flags, ref byte nthWeekDay)
+        private static unsafe long ParseDayOfWeek(ref char* pointer, ref CronExpressionFlag flags, ref byte nthWeekDay, out bool isStar)
         {
+            isStar = false;
             var field = CronField.DaysOfWeek;
-            if (Accept(ref pointer, '*') || Accept(ref pointer, '?')) return ParseStar(field, ref pointer);
+            if (Accept(ref pointer, '*') || Accept(ref pointer, '?'))
+            {
+                isStar = true;
+                return ParseStar(field, ref pointer);
+            }
 
             var dayOfWeek = ParseValue(field, ref pointer);
 
